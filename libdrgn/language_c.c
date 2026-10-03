@@ -13,6 +13,7 @@
 #include "array.h"
 #include "bitops.h"
 #include "c_lexer.h"
+#include "dwarf_info.h"
 #include "error.h"
 #include "language.h" // IWYU pragma: associated
 #include "lexer.h"
@@ -132,10 +133,8 @@ c_append_tagged_name(struct drgn_qualified_type qualified_type, size_t indent,
 	}
 
 	const char *tag = drgn_type_tag(qualified_type.type);
-	if (!need_keyword
-	    && (!tag
-		|| drgn_type_language(qualified_type.type)
-		   != &drgn_language_cpp))
+	bool cpp = drgn_type_language(qualified_type.type) == &drgn_language_cpp;
+	if (!need_keyword && (!tag || !cpp))
 		need_keyword = true;
 
 	if (!append_tabs(indent, sb))
@@ -151,9 +150,18 @@ c_append_tagged_name(struct drgn_qualified_type qualified_type, size_t indent,
 		return &drgn_enomem;
 
 	if (tag) {
-		if ((need_keyword && !string_builder_appendc(sb, ' ')) ||
-		    !string_builder_append(sb, tag))
+		if (need_keyword && !string_builder_appendc(sb, ' '))
 			return &drgn_enomem;
+		// C++ types from DWARF get their fully qualified name.
+		if (cpp && drgn_type_has_die_addr(qualified_type.type)
+		    && drgn_type_die_addr(qualified_type.type)) {
+			err = drgn_dwarf_append_fully_qualified_name(qualified_type.type,
+								     sb);
+			if (err)
+				return err;
+		} else if (!string_builder_append(sb, tag)) {
+			return &drgn_enomem;
+		}
 	}
 
 	return NULL;

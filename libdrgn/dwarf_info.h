@@ -260,6 +260,15 @@ struct drgn_error *drgn_find_die_ancestors(Dwarf_Die *die, Dwarf_Die **dies_ret,
 					  size_t *length_ret)
 	__attribute__((__nonnull__(2, 3)));
 
+struct string_builder;
+/**
+ * Append the fully qualified name (e.g., `ns::Outer::Inner`) of a tagged type
+ * parsed from DWARF: its enclosing namespaces and classes, then its tag.
+ */
+struct drgn_error *
+drgn_dwarf_append_fully_qualified_name(struct drgn_type *type,
+				       struct string_builder *sb);
+
 /**
  * Get an array of names of `DW_TAG_variable` and `DW_TAG_formal_parameter` DIEs
  * in local scopes.

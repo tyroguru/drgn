@@ -3960,6 +3960,22 @@ struct drgn_error *drgn_type_linkage_name(struct drgn_type *type,
 					  const char **ret)
 	__attribute__((__nonnull__(1, 2)));
 
+/**
+ * Get the fully qualified name of a structure, union, class, or enumerated
+ * type parsed from DWARF, e.g., `ns::Outer::Inner`: its enclosing namespaces
+ * and classes, then its tag. Anonymous scopes are omitted, and there is no
+ * leading `::`.
+ *
+ * @param[out] str_ret Returned name. It must be freed with @c free().
+ * @param[out] len_ret Returned length of @p str_ret.
+ * @return @c NULL on success, non-@c NULL on error (including if the type
+ * wasn't parsed from DWARF).
+ */
+struct drgn_error *drgn_type_fully_qualified_name(struct drgn_type *type,
+						  char **str_ret,
+						  size_t *len_ret)
+	__attribute__((__nonnull__(1, 2, 3)));
+
 #ifdef _LIBDW_H
 /**
  * Get the DWARF DIE that a type was parsed from. Only declared if

@@ -20,6 +20,7 @@
 #include "dwarf_constants.h"
 #include "elf_file.h"
 #include "error.h"
+#include "string_builder.h"
 #include "language.h"
 #include "lazy_object.h"
 #include "log.h"
@@ -4705,6 +4706,108 @@ drgn_type_from_dwarf(struct drgn_debug_info *dbinfo, struct drgn_elf_file *file,
 {
 	return drgn_type_from_dwarf_internal(dbinfo, file, die, true, NULL,
 					     ret);
+}
+
+struct drgn_error *
+drgn_dwarf_append_fully_qualified_name(struct drgn_type *type,
+				       struct string_builder *sb)
+{
+	struct drgn_error *err;
+
+	Dwarf_Die die;
+	err = drgn_type_dwarf_die(type, &die);
+	if (err)
+		return err;
+
+	// A definition outside its scope (e.g., `struct ns::A::B { ... };`)
+	// points to its declaration with DW_AT_specification; the declaration
+	// is in the scope that qualifies the name. Bound the chain in case of
+	// malformed debug information.
+	for (int depth = 0; depth < 16; depth++) {
+		Dwarf_Attribute attr_mem, *attr;
+		if (!(attr = dwarf_attr(&die, DW_AT_specification, &attr_mem)))
+			break;
+		if (!dwarf_formref_die(attr, &die))
+			return drgn_error_libdw();
+	}
+
+	_cleanup_free_ Dwarf_Die *ancestors = NULL;
+	size_t num_ancestors;
+	err = drgn_find_die_ancestors(&die, &ancestors, &num_ancestors);
+	if (err)
+		return err;
+
+	struct drgn_debug_info *dbinfo = &drgn_type_program(type)->dbinfo;
+	struct drgn_elf_file *file = NULL;
+	// ancestors[0] is the unit DIE and ancestors[num_ancestors] is the DIE
+	// itself; everything in between is an enclosing scope.
+	for (size_t i = 1; i < num_ancestors; i++) {
+		Dwarf_Die *ancestor = &ancestors[i];
+		const char *name;
+		switch (dwarf_tag(ancestor)) {
+		case DW_TAG_namespace:
+			name = dwarf_diename(ancestor);
+			if (!name) // Anonymous namespace.
+				continue;
+			break;
+		case DW_TAG_structure_type:
+		case DW_TAG_union_type:
+		case DW_TAG_class_type: {
+			if (!dwarf_diename(ancestor))
+				continue;
+			// Use the enclosing type's tag as drgn names it (e.g.,
+			// with template arguments).
+			if (!file) {
+				struct drgn_dwarf_index_cu *cu =
+					drgn_dwarf_index_find_cu(dbinfo,
+								 (uintptr_t)die.addr);
+				if (!cu) {
+					return drgn_error_create(DRGN_ERROR_BAD_DATA,
+								 "DIE from unknown DWARF CU");
+				}
+				file = cu->file;
+			}
+			struct drgn_qualified_type enclosing;
+			err = drgn_type_from_dwarf(dbinfo, file, ancestor,
+						   &enclosing);
+			if (err)
+				return err;
+			name = drgn_type_tag(enclosing.type);
+			if (!name)
+				continue;
+			break;
+		}
+		default:
+			continue;
+		}
+		if (!string_builder_append(sb, name) ||
+		    !string_builder_append(sb, "::"))
+			return &drgn_enomem;
+	}
+	const char *tag = drgn_type_tag(type);
+	if (tag && !string_builder_append(sb, tag))
+		return &drgn_enomem;
+	return NULL;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_fully_qualified_name(struct drgn_type *type, char **str_ret,
+			       size_t *len_ret)
+{
+	if (!drgn_type_has_tag(type)) {
+		return drgn_error_format(DRGN_ERROR_INVALID_ARGUMENT,
+					 "%s type does not have a fully qualified name",
+					 drgn_type_kind_spelling[drgn_type_kind(type)]);
+	}
+	STRING_BUILDER(sb);
+	struct drgn_error *err = drgn_dwarf_append_fully_qualified_name(type, &sb);
+	if (err)
+		return err;
+	if (!string_builder_null_terminate(&sb))
+		return &drgn_enomem;
+	*len_ret = sb.len;
+	*str_ret = string_builder_steal(&sb);
+	return NULL;
 }
 
 /**
