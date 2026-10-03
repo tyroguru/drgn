@@ -78,6 +78,16 @@ struct drgn_compound_type {
 	// C++ base classes. See drgn_type_parents().
 	struct drgn_type_template_parameter *_parents;
 	size_t _num_parents;
+	// C++ member functions. See drgn_type_functions().
+	struct drgn_type_member_function *_functions;
+	size_t _num_functions;
+};
+
+// Function types carry their name separately: struct drgn_type's
+// _name/_tag is shared with _parameters. See drgn_type_function_name().
+struct drgn_function_type {
+	struct drgn_templated_type templated;
+	const char *_function_name;
 };
 
 struct drgn_enum_type {
@@ -243,6 +253,27 @@ size_t drgn_type_num_parents(struct drgn_type *type)
 {
 	assert(drgn_type_has_members(type));
 	return ((struct drgn_compound_type *)type)->_num_parents;
+}
+
+DRGN_ACCESSOR_LINKAGE
+const char *drgn_type_function_name(struct drgn_type *type)
+{
+	assert(type->_kind == DRGN_TYPE_FUNCTION);
+	return ((struct drgn_function_type *)type)->_function_name;
+}
+
+DRGN_ACCESSOR_LINKAGE
+struct drgn_type_member_function *drgn_type_functions(struct drgn_type *type)
+{
+	assert(drgn_type_has_functions(type));
+	return ((struct drgn_compound_type *)type)->_functions;
+}
+
+DRGN_ACCESSOR_LINKAGE
+size_t drgn_type_num_functions(struct drgn_type *type)
+{
+	assert(drgn_type_has_functions(type));
+	return ((struct drgn_compound_type *)type)->_num_functions;
 }
 
 static inline bool drgn_type_kind_has_die_addr(enum drgn_type_kind kind)

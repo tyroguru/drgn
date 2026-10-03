@@ -3866,6 +3866,77 @@ size_t drgn_type_num_template_parameters(struct drgn_type *type);
  */
 DRGN_ACCESSOR_LINKAGE
 struct drgn_type_template_parameter *drgn_type_parents(struct drgn_type *type);
+
+/**
+ * A C++ member function of a structure, union, or class type.
+ *
+ * Access its type with @ref drgn_member_function_type().
+ */
+struct drgn_type_member_function {
+	/** The function (lazily evaluated). */
+	union drgn_lazy_object func;
+};
+
+/**
+ * Get whether a kind of type has member functions. This is true for
+ * structure, union, and class types.
+ */
+static inline bool drgn_type_kind_has_functions(enum drgn_type_kind kind)
+{
+	return (kind == DRGN_TYPE_STRUCT ||
+		kind == DRGN_TYPE_UNION ||
+		kind == DRGN_TYPE_CLASS);
+}
+/** Get whether a type has member functions. */
+static inline bool drgn_type_has_functions(struct drgn_type *type)
+{
+	return drgn_type_kind_has_functions(drgn_type_kind(type));
+}
+/**
+ * Get the member functions of a type. @ref drgn_type_has_functions() must be
+ * true for this type.
+ */
+DRGN_ACCESSOR_LINKAGE
+struct drgn_type_member_function *drgn_type_functions(struct drgn_type *type);
+/**
+ * Get the number of member functions of a type. @ref
+ * drgn_type_has_functions() must be true for this type. If the type is
+ * incomplete, this is always zero.
+ */
+DRGN_ACCESSOR_LINKAGE
+size_t drgn_type_num_functions(struct drgn_type *type);
+
+/**
+ * Get the name of a function type parsed from debug information (e.g., a C++
+ * member function's name), or @c NULL if it has none (e.g., the type of a
+ * function pointer). The type must be a @ref DRGN_TYPE_FUNCTION.
+ */
+DRGN_ACCESSOR_LINKAGE
+const char *drgn_type_function_name(struct drgn_type *type);
+
+/**
+ * Get the type of a member function (a @ref DRGN_TYPE_FUNCTION; see @ref
+ * drgn_type_function_name() for its name).
+ *
+ * @param[out] ret Returned type.
+ * @return @c NULL on success, non-@c NULL on error.
+ */
+struct drgn_error *
+drgn_member_function_type(struct drgn_type_member_function *func,
+			  struct drgn_qualified_type *ret)
+	__attribute__((__nonnull__(1, 2)));
+
+/**
+ * Get a member function as an object.
+ *
+ * @param[out] ret Returned object, or @c NULL if the function is absent
+ * (e.g., declared but not defined).
+ * @return @c NULL on success, non-@c NULL on error.
+ */
+struct drgn_error *
+drgn_member_function_object(struct drgn_type_member_function *func,
+			    const struct drgn_object **ret)
+	__attribute__((__nonnull__(1, 2)));
 /**
  * Get the number of base classes of a structure, union, or class type. @ref
  * drgn_type_has_members() must be true for this type. If the type is

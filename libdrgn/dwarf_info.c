@@ -5849,6 +5849,47 @@ struct drgn_dwarf_die_thunk_arg {
 };
 
 static struct drgn_error *
+drgn_dwarf_member_function_thunk_fn(struct drgn_object *res, void *arg_)
+{
+	struct drgn_dwarf_die_thunk_arg *arg = arg_;
+	if (res) {
+		struct drgn_error *err =
+			drgn_object_from_dwarf_subprogram(&drgn_object_program(res)->dbinfo,
+							  arg->file, &arg->die,
+							  res);
+		if (err)
+			return err;
+	}
+	free(arg);
+	return NULL;
+}
+
+// A C++ member function: a DW_TAG_subprogram child of a compound type.
+static struct drgn_error *
+parse_member_function(struct drgn_debug_info *dbinfo,
+		      struct drgn_elf_file *file, Dwarf_Die *die,
+		      struct drgn_compound_type_builder *builder)
+{
+	struct drgn_dwarf_die_thunk_arg *thunk_arg =
+		malloc(sizeof(*thunk_arg));
+	if (!thunk_arg)
+		return &drgn_enomem;
+	thunk_arg->file = file;
+	thunk_arg->die = *die;
+
+	union drgn_lazy_object func_object;
+	drgn_lazy_object_init_thunk(&func_object, dbinfo->prog,
+				    drgn_dwarf_member_function_thunk_fn,
+				    thunk_arg);
+
+	struct drgn_error *err =
+		drgn_compound_type_builder_add_function(builder, &func_object);
+	if (err)
+		drgn_lazy_object_deinit(&func_object);
+	return err;
+}
+
+static struct drgn_error *
 drgn_dwarf_template_type_parameter_thunk_fn(struct drgn_object *res, void *arg_)
 {
 	struct drgn_error *err;
@@ -6061,6 +6102,12 @@ drgn_compound_type_from_dwarf(struct drgn_debug_info *dbinfo,
 		case DW_TAG_GNU_template_parameter_pack:
 			err = drgn_parse_template_parameter_pack(dbinfo, file, &child,
 								 &builder.template_builder);
+			if (err)
+				return err;
+			break;
+		case DW_TAG_subprogram:
+			err = parse_member_function(dbinfo, file, &child,
+						    &builder);
 			if (err)
 				return err;
 			break;
@@ -6519,6 +6566,20 @@ drgn_function_type_from_dwarf(struct drgn_debug_info *dbinfo,
 	_cleanup_(drgn_function_type_builder_deinit)
 		struct drgn_function_type_builder builder;
 	drgn_function_type_builder_init(&builder, dbinfo->prog);
+
+	// Record the function's name (e.g., for C++ member functions; see
+	// drgn_type_function_name()). dwarf_attr_integrate follows
+	// DW_AT_specification and DW_AT_abstract_origin.
+	Dwarf_Attribute name_attr_mem, *name_attr;
+	if ((name_attr = dwarf_attr_integrate(die, DW_AT_name, &name_attr_mem))) {
+		builder.name = dwarf_formstring(name_attr);
+		if (!builder.name) {
+			return drgn_error_format(DRGN_ERROR_BAD_DATA,
+						 "%s has invalid DW_AT_name",
+						 dwarf_tag_str(die, tag_buf));
+		}
+	}
+
 	bool is_variadic = false;
 	Dwarf_Die child;
 	int r = dwarf_child(die, &child);

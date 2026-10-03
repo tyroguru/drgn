@@ -527,6 +527,7 @@ drgn_template_parameters_builder_last(struct drgn_template_parameters_builder *b
 }
 
 DEFINE_VECTOR_FUNCTIONS(drgn_type_member_vector);
+DEFINE_VECTOR_FUNCTIONS(drgn_type_member_function_vector);
 
 void drgn_compound_type_builder_init(struct drgn_compound_type_builder *builder,
 				     struct drgn_program *prog,
@@ -539,6 +540,7 @@ void drgn_compound_type_builder_init(struct drgn_compound_type_builder *builder,
 	drgn_template_parameters_builder_init(&builder->parents_builder, prog);
 	builder->kind = kind;
 	drgn_type_member_vector_init(&builder->members);
+	drgn_type_member_function_vector_init(&builder->functions);
 }
 
 void
@@ -549,6 +551,47 @@ drgn_compound_type_builder_deinit(struct drgn_compound_type_builder *builder)
 	drgn_type_member_vector_deinit(&builder->members);
 	drgn_template_parameters_builder_deinit(&builder->template_builder);
 	drgn_template_parameters_builder_deinit(&builder->parents_builder);
+	vector_for_each(drgn_type_member_function_vector, func, &builder->functions)
+		drgn_lazy_object_deinit(&func->func);
+	drgn_type_member_function_vector_deinit(&builder->functions);
+}
+
+struct drgn_error *
+drgn_compound_type_builder_add_function(struct drgn_compound_type_builder *builder,
+					const union drgn_lazy_object *object)
+{
+	struct drgn_error *err =
+		drgn_lazy_object_check_prog(object,
+					    builder->template_builder.prog);
+	if (err)
+		return err;
+	struct drgn_type_member_function *func =
+		drgn_type_member_function_vector_append_entry(&builder->functions);
+	if (!func)
+		return &drgn_enomem;
+	func->func = *object;
+	return NULL;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_member_function_type(struct drgn_type_member_function *func,
+			  struct drgn_qualified_type *ret)
+{
+	struct drgn_error *err = drgn_lazy_object_evaluate(&func->func);
+	if (!err)
+		*ret = drgn_object_qualified_type(&func->func.obj);
+	return err;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_member_function_object(struct drgn_type_member_function *func,
+			    const struct drgn_object **ret)
+{
+	struct drgn_error *err = drgn_lazy_object_evaluate(&func->func);
+	if (err)
+		return err;
+	*ret = func->func.obj.kind == DRGN_OBJECT_ABSENT ? NULL : &func->func.obj;
+	return NULL;
 }
 
 struct drgn_error *
@@ -593,6 +636,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	drgn_type_member_vector_shrink_to_fit(&builder->members);
 	drgn_type_template_parameter_vector_shrink_to_fit(&builder->template_builder.parameters);
 	drgn_type_template_parameter_vector_shrink_to_fit(&builder->parents_builder.parameters);
+	drgn_type_member_function_vector_shrink_to_fit(&builder->functions);
 
 	_cleanup_free_ struct drgn_compound_type *type = malloc(sizeof(*type));
 	if (!type || !drgn_typep_vector_append(&prog->created_types,
@@ -625,6 +669,10 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 						  &type->_parents,
 						  &type->_num_parents);
 	drgn_type_template_parameter_vector_init(&builder->parents_builder.parameters);
+	drgn_type_member_function_vector_steal(&builder->functions,
+					       &type->_functions,
+					       &type->_num_functions);
+	drgn_type_member_function_vector_init(&builder->functions);
 	*ret = &no_cleanup_ptr(type)->templated.extended.type;
 	return NULL;
 }
@@ -850,6 +898,7 @@ void drgn_function_type_builder_init(struct drgn_function_type_builder *builder,
 {
 	drgn_template_parameters_builder_init(&builder->template_builder, prog);
 	drgn_type_parameter_vector_init(&builder->parameters);
+	builder->name = NULL;
 }
 
 void
@@ -897,12 +946,12 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 	drgn_type_parameter_vector_shrink_to_fit(&builder->parameters);
 	drgn_type_template_parameter_vector_shrink_to_fit(&builder->template_builder.parameters);
 
-	_cleanup_free_ struct drgn_templated_type *type = malloc(sizeof(*type));
+	_cleanup_free_ struct drgn_function_type *type = malloc(sizeof(*type));
 	if (!type ||!drgn_typep_vector_append(&prog->created_types,
 					      (struct drgn_type **)&type))
 		return &drgn_enomem;
-	*type = (struct drgn_templated_type){
-		.extended = {
+	*type = (struct drgn_function_type){
+		.templated.extended = {
 			.type = {
 				._kind = DRGN_TYPE_FUNCTION,
 				._primitive = DRGN_NOT_PRIMITIVE_TYPE,
@@ -914,16 +963,17 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 				._language = lang ? lang : drgn_program_language(prog),
 			},
 		},
+		._function_name = builder->name,
 	};
 	drgn_type_parameter_vector_steal(&builder->parameters,
-					 &type->extended.type._parameters,
-					 &type->extended.type._num_parameters);
+					 &type->templated.extended.type._parameters,
+					 &type->templated.extended.type._num_parameters);
 	drgn_type_parameter_vector_init(&builder->parameters);
 	drgn_type_template_parameter_vector_steal(&builder->template_builder.parameters,
-						  &type->_template_parameters,
-						  &type->_num_template_parameters);
+						  &type->templated._template_parameters,
+						  &type->templated._num_template_parameters);
 	drgn_type_template_parameter_vector_init(&builder->template_builder.parameters);
-	*ret = &no_cleanup_ptr(type)->extended.type;
+	*ret = &no_cleanup_ptr(type)->templated.extended.type;
 	return NULL;
 }
 

@@ -202,6 +202,8 @@ struct drgn_type_template_parameter *
 drgn_template_parameters_builder_last(struct drgn_template_parameters_builder *builder);
 
 DEFINE_VECTOR_TYPE(drgn_type_member_vector, struct drgn_type_member);
+DEFINE_VECTOR_TYPE(drgn_type_member_function_vector,
+		   struct drgn_type_member_function);
 
 /** Builder for members of a structure, union, or class type. */
 struct drgn_compound_type_builder {
@@ -210,7 +212,14 @@ struct drgn_compound_type_builder {
 	struct drgn_template_parameters_builder parents_builder;
 	enum drgn_type_kind kind;
 	struct drgn_type_member_vector members;
+	/** C++ member functions; see drgn_type_functions(). */
+	struct drgn_type_member_function_vector functions;
 };
+
+/** Add a C++ member function to a @ref drgn_compound_type_builder. */
+struct drgn_error *
+drgn_compound_type_builder_add_function(struct drgn_compound_type_builder *builder,
+					const union drgn_lazy_object *object);
 
 /**
  * Initialize a @ref drgn_compound_type_builder.
@@ -417,6 +426,8 @@ DEFINE_VECTOR_TYPE(drgn_type_parameter_vector, struct drgn_type_parameter);
 struct drgn_function_type_builder {
 	struct drgn_template_parameters_builder template_builder;
 	struct drgn_type_parameter_vector parameters;
+	/** Function name (see drgn_type_function_name()), or @c NULL (the default). */
+	const char *name;
 };
 
 /** Initialize a @ref drgn_function_type_builder. */
