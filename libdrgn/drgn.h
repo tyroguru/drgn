@@ -1229,6 +1229,17 @@ struct drgn_error *drgn_program_find_type(struct drgn_program *prog,
 					  struct drgn_qualified_type *ret);
 
 /**
+ * Find a type by name only, with no filename. Equivalent to
+ * drgn_program_find_type(prog, name, NULL, ret).
+ */
+static inline struct drgn_error *
+drgn_program_find_type_by_pure_name(struct drgn_program *prog, const char *name,
+				    struct drgn_qualified_type *ret)
+{
+	return drgn_program_find_type(prog, name, NULL, ret);
+}
+
+/**
  * Find an object in a program by name.
  *
  * The object can be a variable, constant, or function depending on @p flags.
@@ -3936,6 +3947,30 @@ uint8_t drgn_type_virtuality(struct drgn_type *type);
  */
 DRGN_ACCESSOR_LINKAGE
 const char *drgn_type_function_name(struct drgn_type *type);
+
+/**
+ * Get the DW_AT_linkage_name (mangled name) of a function type parsed from
+ * DWARF, e.g., a C++ member function.
+ *
+ * @param[out] ret Returned name. It is valid as long as the program is.
+ * @return @c NULL on success, an error with @ref DRGN_ERROR_LOOKUP if the
+ * type has no linkage name, non-@c NULL on other errors.
+ */
+struct drgn_error *drgn_type_linkage_name(struct drgn_type *type,
+					  const char **ret)
+	__attribute__((__nonnull__(1, 2)));
+
+#ifdef _LIBDW_H
+/**
+ * Get the DWARF DIE that a type was parsed from. Only declared if
+ * <elfutils/libdw.h> is included before this header.
+ *
+ * @return @c NULL on success, an error with @ref DRGN_ERROR_LOOKUP if the type
+ * wasn't parsed from DWARF, non-@c NULL on other errors.
+ */
+struct drgn_error *drgn_type_dwarf_die(struct drgn_type *type, Dwarf_Die *ret)
+	__attribute__((__nonnull__(1, 2)));
+#endif
 
 /**
  * Get the type of a member function (a @ref DRGN_TYPE_FUNCTION; see @ref

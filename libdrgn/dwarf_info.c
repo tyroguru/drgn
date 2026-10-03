@@ -2555,6 +2555,9 @@ static struct drgn_error *index_namespace_impl(struct drgn_namespace_dwarf_index
 
 static struct drgn_error *index_namespace(struct drgn_namespace_dwarf_index *ns)
 {
+	if (!ns)
+		return drgn_error_create(DRGN_ERROR_INVALID_ARGUMENT,
+					 "attempted to index NULL namespace");
 	if (!ns->dbinfo->modules_pending_indexing
 	    && (ns->cus_indexed
 		>= drgn_dwarf_index_cu_vector_size(&ns->dbinfo->dwarf.index_cus)))
@@ -4577,6 +4580,48 @@ static int dwarf_bytesize64(Dwarf_Die *die, uint64_t *ret)
 		return -1;
 	*ret = tmp;
 	return 0;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *drgn_type_dwarf_die(struct drgn_type *type,
+						      Dwarf_Die *ret)
+{
+	uintptr_t die_addr =
+		drgn_type_has_die_addr(type) ? drgn_type_die_addr(type) : 0;
+	if (!die_addr) {
+		return drgn_error_create(DRGN_ERROR_LOOKUP,
+					 "type was not parsed from DWARF");
+	}
+	struct drgn_dwarf_index_cu *cu =
+		drgn_dwarf_index_find_cu(&drgn_type_program(type)->dbinfo,
+					 die_addr);
+	if (!cu) {
+		return drgn_error_create(DRGN_ERROR_BAD_DATA,
+					 "DIE from unknown DWARF CU");
+	}
+	*ret = (Dwarf_Die){
+		.addr = (void *)die_addr,
+		.cu = cu->libdw_cu,
+	};
+	return NULL;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_linkage_name(struct drgn_type *type, const char **ret)
+{
+	Dwarf_Die die;
+	struct drgn_error *err = drgn_type_dwarf_die(type, &die);
+	if (err)
+		return err;
+	Dwarf_Attribute attr_mem, *attr;
+	if (!(attr = dwarf_attr_integrate(&die, DW_AT_linkage_name,
+					  &attr_mem))) {
+		return drgn_error_create(DRGN_ERROR_LOOKUP,
+					 "type doesn't have a linkage name");
+	}
+	*ret = dwarf_formstring(attr);
+	if (!*ret)
+		return drgn_error_libdw();
+	return NULL;
 }
 
 struct drgn_error *drgn_dwarf_type_alignment(struct drgn_type *type,
