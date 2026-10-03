@@ -3907,6 +3907,29 @@ DRGN_ACCESSOR_LINKAGE
 size_t drgn_type_num_functions(struct drgn_type *type);
 
 /**
+ * Get whether a kind of type has virtuality (C++ DW_AT_virtuality). This is
+ * true for structure, class, and function types.
+ */
+static inline bool drgn_type_kind_has_virtuality(enum drgn_type_kind kind)
+{
+	return (kind == DRGN_TYPE_STRUCT ||
+		kind == DRGN_TYPE_CLASS ||
+		kind == DRGN_TYPE_FUNCTION);
+}
+/** Get whether a type has virtuality. @sa drgn_type_kind_has_virtuality() */
+static inline bool drgn_type_has_virtuality(struct drgn_type *type)
+{
+	return drgn_type_kind_has_virtuality(drgn_type_kind(type));
+}
+/**
+ * Get the virtuality of a type: a DWARF DW_VIRTUALITY_* value (0 is
+ * DW_VIRTUALITY_none, 1 virtual, 2 pure virtual). @ref
+ * drgn_type_has_virtuality() must be true for this type.
+ */
+DRGN_ACCESSOR_LINKAGE
+uint8_t drgn_type_virtuality(struct drgn_type *type);
+
+/**
  * Get the name of a function type parsed from debug information (e.g., a C++
  * member function's name), or @c NULL if it has none (e.g., the type of a
  * function pointer). The type must be a @ref DRGN_TYPE_FUNCTION.

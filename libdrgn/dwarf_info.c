@@ -5843,6 +5843,25 @@ err:
 	return err;
 }
 
+// Parse DW_AT_virtuality (a DW_VIRTUALITY_* value); none if absent.
+static struct drgn_error *parse_virtuality(Dwarf_Die *die, uint8_t *ret)
+{
+	Dwarf_Attribute attr_mem, *attr;
+	if (!(attr = dwarf_attr_integrate(die, DW_AT_virtuality, &attr_mem))) {
+		*ret = DW_VIRTUALITY_none;
+		return NULL;
+	}
+	Dwarf_Word virtuality;
+	if (dwarf_formudata(attr, &virtuality) || virtuality > UINT8_MAX) {
+		char tag_buf[DW_TAG_STR_BUF_LEN];
+		return drgn_error_format(DRGN_ERROR_BAD_DATA,
+					 "%s has invalid DW_AT_virtuality",
+					 dwarf_tag_str(die, tag_buf));
+	}
+	*ret = virtuality;
+	return NULL;
+}
+
 struct drgn_dwarf_die_thunk_arg {
 	struct drgn_elf_file *file;
 	Dwarf_Die die;
@@ -6051,6 +6070,9 @@ drgn_compound_type_from_dwarf(struct drgn_debug_info *dbinfo,
 	_cleanup_(drgn_compound_type_builder_deinit)
 		struct drgn_compound_type_builder builder;
 	drgn_compound_type_builder_init(&builder, dbinfo->prog, kind);
+	err = parse_virtuality(die, &builder.virtuality);
+	if (err)
+		return err;
 
 	uint64_t size;
 	bool little_endian;
@@ -6566,6 +6588,10 @@ drgn_function_type_from_dwarf(struct drgn_debug_info *dbinfo,
 	_cleanup_(drgn_function_type_builder_deinit)
 		struct drgn_function_type_builder builder;
 	drgn_function_type_builder_init(&builder, dbinfo->prog);
+
+	err = parse_virtuality(die, &builder.virtuality);
+	if (err)
+		return err;
 
 	// Record the function's name (e.g., for C++ member functions; see
 	// drgn_type_function_name()). dwarf_attr_integrate follows

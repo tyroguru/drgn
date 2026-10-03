@@ -541,6 +541,7 @@ void drgn_compound_type_builder_init(struct drgn_compound_type_builder *builder,
 	builder->kind = kind;
 	drgn_type_member_vector_init(&builder->members);
 	drgn_type_member_function_vector_init(&builder->functions);
+	builder->virtuality = 0;
 }
 
 void
@@ -672,6 +673,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	drgn_type_member_function_vector_steal(&builder->functions,
 					       &type->_functions,
 					       &type->_num_functions);
+	type->_virtuality = builder->virtuality;
 	drgn_type_member_function_vector_init(&builder->functions);
 	*ret = &no_cleanup_ptr(type)->templated.extended.type;
 	return NULL;
@@ -899,6 +901,7 @@ void drgn_function_type_builder_init(struct drgn_function_type_builder *builder,
 	drgn_template_parameters_builder_init(&builder->template_builder, prog);
 	drgn_type_parameter_vector_init(&builder->parameters);
 	builder->name = NULL;
+	builder->virtuality = 0;
 }
 
 void
@@ -964,6 +967,7 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 			},
 		},
 		._function_name = builder->name,
+		._virtuality = builder->virtuality,
 	};
 	drgn_type_parameter_vector_steal(&builder->parameters,
 					 &type->templated.extended.type._parameters,

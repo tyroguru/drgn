@@ -81,6 +81,8 @@ struct drgn_compound_type {
 	// C++ member functions. See drgn_type_functions().
 	struct drgn_type_member_function *_functions;
 	size_t _num_functions;
+	// See drgn_type_virtuality().
+	uint8_t _virtuality;
 };
 
 // Function types carry their name separately: struct drgn_type's
@@ -88,6 +90,8 @@ struct drgn_compound_type {
 struct drgn_function_type {
 	struct drgn_templated_type templated;
 	const char *_function_name;
+	// See drgn_type_virtuality().
+	uint8_t _virtuality;
 };
 
 struct drgn_enum_type {
@@ -253,6 +257,15 @@ size_t drgn_type_num_parents(struct drgn_type *type)
 {
 	assert(drgn_type_has_members(type));
 	return ((struct drgn_compound_type *)type)->_num_parents;
+}
+
+DRGN_ACCESSOR_LINKAGE
+uint8_t drgn_type_virtuality(struct drgn_type *type)
+{
+	assert(drgn_type_has_virtuality(type));
+	if (type->_kind == DRGN_TYPE_FUNCTION)
+		return ((struct drgn_function_type *)type)->_virtuality;
+	return ((struct drgn_compound_type *)type)->_virtuality;
 }
 
 DRGN_ACCESSOR_LINKAGE

@@ -214,6 +214,8 @@ struct drgn_compound_type_builder {
 	struct drgn_type_member_vector members;
 	/** C++ member functions; see drgn_type_functions(). */
 	struct drgn_type_member_function_vector functions;
+	/** DW_VIRTUALITY_* (default none); see drgn_type_virtuality(). */
+	uint8_t virtuality;
 };
 
 /** Add a C++ member function to a @ref drgn_compound_type_builder. */
@@ -428,6 +430,8 @@ struct drgn_function_type_builder {
 	struct drgn_type_parameter_vector parameters;
 	/** Function name (see drgn_type_function_name()), or @c NULL (the default). */
 	const char *name;
+	/** DW_VIRTUALITY_* (default none); see drgn_type_virtuality(). */
+	uint8_t virtuality;
 };
 
 /** Initialize a @ref drgn_function_type_builder. */
