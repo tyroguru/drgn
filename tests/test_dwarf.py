@@ -2628,6 +2628,131 @@ class TestTypes(TestCase):
             prog.type("TEST").type, prog.pointer_type(prog.int_type("int", 4, True), 8)
         )
 
+    def test_reference_types_are_pointers(self):
+        # OI: references and pointers to members are treated as pointers.
+        for tag in (
+            DW_TAG.reference_type,
+            DW_TAG.rvalue_reference_type,
+            DW_TAG.ptr_to_member_type,
+        ):
+            with self.subTest(tag=tag):
+                prog = dwarf_program(
+                    wrap_test_type_dies(
+                        DwarfDie(
+                            tag,
+                            (DwarfAttrib(DW_AT.type, DW_FORM.ref4, "int_die"),),
+                        ),
+                        *labeled_int_die,
+                    )
+                )
+                self.assertIdentical(
+                    prog.type("TEST").type,
+                    prog.pointer_type(prog.int_type("int", 4, True)),
+                )
+
+    def test_unspecified_type_is_void(self):
+        # OI: DW_TAG_unspecified_type (e.g., decltype(nullptr)) becomes void.
+        prog = dwarf_program(
+            wrap_test_type_dies(
+                DwarfDie(
+                    DW_TAG.unspecified_type,
+                    (DwarfAttrib(DW_AT.name, DW_FORM.string, "decltype(nullptr)"),),
+                ),
+            )
+        )
+        self.assertIdentical(prog.type("TEST").type, prog.void_type())
+
+    def test_struct_static_member_skipped(self):
+        # OI: static data members (DW_AT_external) aren't part of the object.
+        prog = dwarf_program(
+            wrap_test_type_dies(
+                DwarfDie(
+                    DW_TAG.structure_type,
+                    (
+                        DwarfAttrib(DW_AT.name, DW_FORM.string, "point"),
+                        DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 4),
+                    ),
+                    (
+                        DwarfDie(
+                            DW_TAG.member,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "x"),
+                                DwarfAttrib(DW_AT.data_member_location, DW_FORM.data1, 0),
+                                DwarfAttrib(DW_AT.type, DW_FORM.ref4, "int_die"),
+                            ),
+                        ),
+                        DwarfDie(
+                            DW_TAG.member,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "count"),
+                                DwarfAttrib(DW_AT.type, DW_FORM.ref4, "int_die"),
+                                DwarfAttrib(DW_AT.external, DW_FORM.flag_present, True),
+                                DwarfAttrib(DW_AT.declaration, DW_FORM.flag_present, True),
+                            ),
+                        ),
+                    ),
+                ),
+                *labeled_int_die,
+            )
+        )
+        self.assertIdentical(
+            prog.type("TEST").type,
+            prog.struct_type(
+                "point", 4, (TypeMember(prog.int_type("int", 4, True), "x", 0),)
+            ),
+        )
+
+    def test_incomplete_class_to_complete_struct(self):
+        # OI: a class declaration can be completed by a struct definition (and
+        # vice versa); C++ allows declaring a type with either keyword.
+        for decl_tag, def_tag in (
+            (DW_TAG.class_type, DW_TAG.structure_type),
+            (DW_TAG.structure_type, DW_TAG.class_type),
+        ):
+            with self.subTest(decl=decl_tag, definition=def_tag):
+                prog = dwarf_program(
+                    wrap_test_type_dies(
+                        DwarfDie(
+                            DW_TAG.pointer_type,
+                            (
+                                DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 8),
+                                DwarfAttrib(DW_AT.type, DW_FORM.ref4, "decl_die"),
+                            ),
+                        ),
+                        DwarfLabel("decl_die"),
+                        DwarfDie(
+                            decl_tag,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "point"),
+                                DwarfAttrib(DW_AT.declaration, DW_FORM.flag_present, True),
+                            ),
+                        ),
+                        DwarfDie(
+                            def_tag,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "point"),
+                                DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 4),
+                            ),
+                            (
+                                DwarfDie(
+                                    DW_TAG.member,
+                                    (
+                                        DwarfAttrib(DW_AT.name, DW_FORM.string, "x"),
+                                        DwarfAttrib(
+                                            DW_AT.data_member_location, DW_FORM.data1, 0
+                                        ),
+                                        DwarfAttrib(DW_AT.type, DW_FORM.ref4, "int_die"),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        *labeled_int_die,
+                    )
+                )
+                pointee = prog.type("TEST").type.type
+                self.assertTrue(pointee.is_complete())
+                self.assertEqual(pointee.size, 4)
+
     def test_pointer_explicit_size(self):
         prog = dwarf_program(
             wrap_test_type_dies(

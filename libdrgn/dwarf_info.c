@@ -6026,12 +6026,13 @@ drgn_compound_type_from_dwarf(struct drgn_debug_info *dbinfo,
 	int r = dwarf_child(die, &child);
 	while (r == 0) {
 		switch (dwarf_tag(&child)) {
-		case DW_TAG_member:
-			;
+		case DW_TAG_member: {
+			// Static data members (DW_AT_external in DWARF 4) aren't
+			// part of the object.
 			bool external;
 			if (dwarf_flag(&child, DW_AT_external, &external)) {
-				return drgn_error_format(DRGN_ERROR_OTHER,
-				"DW_TAG_member has invalid DW_AT_external");
+				return drgn_error_create(DRGN_ERROR_OTHER,
+							 "DW_TAG_member has invalid DW_AT_external");
 			}
 			if (!declaration && !external) {
 				if (member.addr) {
@@ -6046,6 +6047,7 @@ drgn_compound_type_from_dwarf(struct drgn_debug_info *dbinfo,
 				member = child;
 			}
 			break;
+		}
 		case DW_TAG_template_type_parameter:
 		case DW_TAG_template_value_parameter:
 			err = maybe_parse_template_parameter(dbinfo, file, &child,
@@ -6701,8 +6703,8 @@ drgn_type_from_dwarf_internal(struct drgn_debug_info *dbinfo,
 						    &ret->type);
 		break;
 	case DW_TAG_unspecified_type:
-		err = drgn_function_type_from_dwarf(dbinfo, file, die, lang,
-						    &ret->type);
+		// e.g., decltype(nullptr). There's nothing to parse; treat it
+		// as void.
 		ret->type = drgn_void_type(dbinfo->prog, lang);
 		break;
 	default:
