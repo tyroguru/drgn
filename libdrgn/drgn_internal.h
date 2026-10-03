@@ -75,6 +75,9 @@ struct drgn_templated_type {
 struct drgn_compound_type {
 	struct drgn_templated_type templated;
 	size_t _num_members;
+	// C++ base classes. See drgn_type_parents().
+	struct drgn_type_template_parameter *_parents;
+	size_t _num_parents;
 };
 
 struct drgn_enum_type {
@@ -226,6 +229,20 @@ size_t drgn_type_num_template_parameters(struct drgn_type *type)
 {
 	assert(drgn_type_has_template_parameters(type));
 	return ((struct drgn_templated_type *)type)->_num_template_parameters;
+}
+
+DRGN_ACCESSOR_LINKAGE
+struct drgn_type_template_parameter *drgn_type_parents(struct drgn_type *type)
+{
+	assert(drgn_type_has_members(type));
+	return ((struct drgn_compound_type *)type)->_parents;
+}
+
+DRGN_ACCESSOR_LINKAGE
+size_t drgn_type_num_parents(struct drgn_type *type)
+{
+	assert(drgn_type_has_members(type));
+	return ((struct drgn_compound_type *)type)->_num_parents;
 }
 
 static inline bool drgn_type_kind_has_die_addr(enum drgn_type_kind kind)

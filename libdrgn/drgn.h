@@ -3529,6 +3529,11 @@ struct drgn_type_template_parameter {
 	const char *name;
 	/** Whether the argument is the default. */
 	bool is_default;
+	/**
+	 * For a base class returned by @ref drgn_type_parents(), its offset
+	 * within the derived class in bits. Zero for template parameters.
+	 */
+	uint64_t bit_offset;
 };
 
 /**
@@ -3850,6 +3855,24 @@ drgn_type_template_parameters(struct drgn_type *type);
  */
 DRGN_ACCESSOR_LINKAGE
 size_t drgn_type_num_template_parameters(struct drgn_type *type);
+
+/**
+ * Get the base classes (C++ inheritance) of a structure, union, or class
+ * type. @ref drgn_type_has_members() must be true for this type.
+ *
+ * Each base class is represented as a @ref drgn_type_template_parameter whose
+ * argument is the base type and whose @c bit_offset is its offset in the
+ * derived type.
+ */
+DRGN_ACCESSOR_LINKAGE
+struct drgn_type_template_parameter *drgn_type_parents(struct drgn_type *type);
+/**
+ * Get the number of base classes of a structure, union, or class type. @ref
+ * drgn_type_has_members() must be true for this type. If the type is
+ * incomplete, this is always zero.
+ */
+DRGN_ACCESSOR_LINKAGE
+size_t drgn_type_num_parents(struct drgn_type *type);
 
 /** Remove all top-level typedefs from a @ref drgn_qualified_type. */
 struct drgn_qualified_type
