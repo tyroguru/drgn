@@ -1229,6 +1229,57 @@ struct drgn_error *drgn_program_find_type(struct drgn_program *prog,
 					  struct drgn_qualified_type *ret);
 
 /**
+ * @defgroup TypeIterators Type and function iterators
+ *
+ * Iterate over all types or functions in a program's DWARF debugging
+ * information. The iterators are not flat: a type that only appears nested
+ * inside another (e.g., as a member's type) and isn't indexed on its own may
+ * not be yielded.
+ *
+ * @{
+ */
+
+/** Iterator over structure, class, union, enumerated, and base types. */
+struct drgn_type_iterator;
+
+/** Create a @ref drgn_type_iterator. */
+struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
+					     struct drgn_type_iterator **ret);
+
+/** Destroy a @ref drgn_type_iterator. */
+void drgn_type_iterator_destroy(struct drgn_type_iterator *it);
+
+/**
+ * Get the next type from a @ref drgn_type_iterator.
+ *
+ * @param[out] ret Returned type, or @c NULL if there are no more types. It
+ * is valid until the next call.
+ */
+struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *it,
+					   struct drgn_qualified_type **ret);
+
+/** Iterator over all functions (their function types). */
+struct drgn_func_iterator;
+
+/** Create a @ref drgn_func_iterator. */
+struct drgn_error *drgn_func_iterator_create(struct drgn_program *prog,
+					     struct drgn_func_iterator **ret);
+
+/** Destroy a @ref drgn_func_iterator. */
+void drgn_func_iterator_destroy(struct drgn_func_iterator *it);
+
+/**
+ * Get the next function type from a @ref drgn_func_iterator.
+ *
+ * @param[out] ret Returned type, or @c NULL if there are no more functions.
+ * It is valid until the next call.
+ */
+struct drgn_error *drgn_func_iterator_next(struct drgn_func_iterator *it,
+					   struct drgn_qualified_type **ret);
+
+/** @} */
+
+/**
  * Find a type by name only, with no filename. Equivalent to
  * drgn_program_find_type(prog, name, NULL, ret).
  */

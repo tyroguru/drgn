@@ -4790,6 +4790,204 @@ drgn_dwarf_append_fully_qualified_name(struct drgn_type *type,
 	return NULL;
 }
 
+DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index *);
+
+// Iterates over the DIEs of the given index tags in every namespace (and
+// class scope with nested definitions), plus base types if requested, and
+// yields the drgn type parsed from each.
+struct drgn_type_iterator_impl {
+	struct drgn_debug_info *dbinfo;
+	struct drgn_dwarf_base_type_map_iterator base_type_map_it;
+	struct drgn_namespace_dwarf_index *current_namespace;
+	struct namespace_vector namespaces;
+	struct drgn_dwarf_index_die_map_iterator map_it;
+	const enum drgn_dwarf_index_tag *tags;
+	size_t num_tags;
+	size_t next_tag;
+	struct drgn_qualified_type curr;
+};
+
+static struct drgn_error *
+drgn_type_iterator_impl_init(struct drgn_type_iterator_impl *it,
+			     struct drgn_debug_info *dbinfo,
+			     const enum drgn_dwarf_index_tag *tags,
+			     size_t num_tags, bool base_types)
+{
+	// Indexing the global namespace also populates the base type map.
+	struct drgn_error *err = index_namespace(&dbinfo->dwarf.global);
+	if (err)
+		return err;
+	it->dbinfo = dbinfo;
+	it->base_type_map_it =
+		base_types
+		? drgn_dwarf_base_type_map_first(&dbinfo->dwarf.base_types)
+		: (struct drgn_dwarf_base_type_map_iterator){};
+	it->current_namespace = &dbinfo->dwarf.global;
+	namespace_vector_init(&it->namespaces);
+	it->map_it = (struct drgn_dwarf_index_die_map_iterator){};
+	it->tags = tags;
+	it->num_tags = num_tags;
+	it->next_tag = 0;
+	return NULL;
+}
+
+static void drgn_type_iterator_impl_deinit(struct drgn_type_iterator_impl *it)
+{
+	namespace_vector_deinit(&it->namespaces);
+}
+
+static struct drgn_error *
+drgn_type_iterator_impl_next(struct drgn_type_iterator_impl *it,
+			     struct drgn_qualified_type **ret)
+{
+	struct drgn_error *err;
+	uintptr_t die_addr;
+	if (it->base_type_map_it.entry) {
+		// Yield the base types first.
+		die_addr = it->base_type_map_it.entry->value;
+		it->base_type_map_it =
+			drgn_dwarf_base_type_map_next(it->base_type_map_it);
+	} else {
+		struct drgn_namespace_dwarf_index *ns = it->current_namespace;
+		if (!ns) {
+			*ret = NULL;
+			return NULL;
+		}
+		while (!it->map_it.entry) {
+			if (it->next_tag >= it->num_tags) {
+				// Done with this namespace: queue its children
+				// (namespaces, and classes with nested
+				// definitions), then move to the next one.
+				for (struct drgn_dwarf_index_die_map_iterator ns_it =
+				     drgn_dwarf_index_die_map_first(&ns->map[DRGN_DWARF_INDEX_namespace]);
+				     ns_it.entry;
+				     ns_it = drgn_dwarf_index_die_map_next(ns_it)) {
+					struct drgn_namespace_dwarf_index *child_ns;
+					err = drgn_namespace_find_child(ns,
+									ns_it.entry->key.str,
+									ns_it.entry->key.len,
+									&child_ns);
+					if (err)
+						return err;
+					err = index_namespace(child_ns);
+					if (err)
+						return err;
+					if (!namespace_vector_append(&it->namespaces,
+								     &child_ns))
+						return &drgn_enomem;
+				}
+				if (namespace_vector_empty(&it->namespaces)) {
+					it->current_namespace = NULL;
+					*ret = NULL;
+					return NULL;
+				}
+				ns = it->current_namespace =
+					*namespace_vector_pop(&it->namespaces);
+				it->next_tag = 0;
+			}
+			it->map_it = drgn_dwarf_index_die_map_first(
+				&ns->map[it->tags[it->next_tag++]]);
+		}
+		die_addr = *drgn_dwarf_index_die_vector_first(&it->map_it.entry->value);
+		it->map_it = drgn_dwarf_index_die_map_next(it->map_it);
+	}
+
+	struct drgn_dwarf_index_cu *cu =
+		drgn_dwarf_index_find_cu(it->dbinfo, die_addr);
+	if (!cu) {
+		return drgn_error_create(DRGN_ERROR_BAD_DATA,
+					 "DIE from unknown DWARF CU");
+	}
+	Dwarf_Die die = {
+		.addr = (void *)die_addr,
+		.cu = cu->libdw_cu,
+	};
+	err = drgn_type_from_dwarf(it->dbinfo, cu->file, &die, &it->curr);
+	if (err)
+		return err;
+	*ret = &it->curr;
+	return NULL;
+}
+
+struct drgn_type_iterator {
+	struct drgn_type_iterator_impl impl;
+};
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_iterator_create(struct drgn_program *prog,
+			  struct drgn_type_iterator **ret)
+{
+	static const enum drgn_dwarf_index_tag tags[] = {
+		DRGN_DWARF_INDEX_structure_type,
+		DRGN_DWARF_INDEX_class_type,
+		DRGN_DWARF_INDEX_union_type,
+		DRGN_DWARF_INDEX_enumeration_type,
+	};
+	_cleanup_free_ struct drgn_type_iterator *it = malloc(sizeof(*it));
+	if (!it)
+		return &drgn_enomem;
+	struct drgn_error *err =
+		drgn_type_iterator_impl_init(&it->impl, &prog->dbinfo, tags,
+					     array_size(tags), true);
+	if (err)
+		return err;
+	*ret = no_cleanup_ptr(it);
+	return NULL;
+}
+
+LIBDRGN_PUBLIC void drgn_type_iterator_destroy(struct drgn_type_iterator *it)
+{
+	if (it) {
+		drgn_type_iterator_impl_deinit(&it->impl);
+		free(it);
+	}
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_iterator_next(struct drgn_type_iterator *it,
+			struct drgn_qualified_type **ret)
+{
+	return drgn_type_iterator_impl_next(&it->impl, ret);
+}
+
+struct drgn_func_iterator {
+	struct drgn_type_iterator_impl impl;
+};
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_func_iterator_create(struct drgn_program *prog,
+			  struct drgn_func_iterator **ret)
+{
+	static const enum drgn_dwarf_index_tag tags[] = {
+		DRGN_DWARF_INDEX_subprogram,
+	};
+	_cleanup_free_ struct drgn_func_iterator *it = malloc(sizeof(*it));
+	if (!it)
+		return &drgn_enomem;
+	struct drgn_error *err =
+		drgn_type_iterator_impl_init(&it->impl, &prog->dbinfo, tags,
+					     array_size(tags), false);
+	if (err)
+		return err;
+	*ret = no_cleanup_ptr(it);
+	return NULL;
+}
+
+LIBDRGN_PUBLIC void drgn_func_iterator_destroy(struct drgn_func_iterator *it)
+{
+	if (it) {
+		drgn_type_iterator_impl_deinit(&it->impl);
+		free(it);
+	}
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_func_iterator_next(struct drgn_func_iterator *it,
+			struct drgn_qualified_type **ret)
+{
+	return drgn_type_iterator_impl_next(&it->impl, ret);
+}
+
 LIBDRGN_PUBLIC struct drgn_error *
 drgn_type_fully_qualified_name(struct drgn_type *type, char **str_ret,
 			       size_t *len_ret)
