@@ -6288,6 +6288,17 @@ drgn_compound_type_from_dwarf(struct drgn_debug_info *dbinfo,
 				return err;
 			struct drgn_type_template_parameter *parent =
 				drgn_template_parameters_builder_last(&builder.parents_builder);
+			// A virtual base's location is a DWARF expression
+			// evaluated at runtime (via the vtable), not a
+			// constant, so it has no static offset.
+			uint8_t base_virtuality;
+			err = parse_virtuality(&child, &base_virtuality);
+			if (err)
+				return err;
+			if (base_virtuality != DW_VIRTUALITY_none) {
+				parent->bit_offset = UINT64_MAX;
+				break;
+			}
 			err = parse_member_offset(&child, &parent->argument,
 						  little_endian,
 						  &parent->bit_offset);

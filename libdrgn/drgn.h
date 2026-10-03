@@ -3542,7 +3542,9 @@ struct drgn_type_template_parameter {
 	bool is_default;
 	/**
 	 * For a base class returned by @ref drgn_type_parents(), its offset
-	 * within the derived class in bits. Zero for template parameters.
+	 * within the derived class in bits, or @c UINT64_MAX for a virtual base
+	 * class, whose offset is only known at runtime. Zero for template
+	 * parameters.
 	 */
 	uint64_t bit_offset;
 };
