@@ -2577,6 +2577,29 @@ struct drgn_error *drgn_dwarf_info_update_index(struct drgn_debug_info *dbinfo)
 	return index_namespace(&dbinfo->dwarf.global);
 }
 
+// Like drgn_dwarf_index_find_cu(), but indexes any new CUs first if die_addr
+// isn't from an indexed CU. A DIE can come from a CU that hasn't been indexed
+// yet: e.g., a type found by address (via drgn_module_find_dwarf_scopes()),
+// not by name.
+static struct drgn_error *
+drgn_dwarf_index_find_cu_or_update(struct drgn_debug_info *dbinfo,
+				   uintptr_t die_addr,
+				   struct drgn_dwarf_index_cu **ret)
+{
+	*ret = drgn_dwarf_index_find_cu(dbinfo, die_addr);
+	if (!*ret) {
+		struct drgn_error *err = drgn_dwarf_info_update_index(dbinfo);
+		if (err)
+			return err;
+		*ret = drgn_dwarf_index_find_cu(dbinfo, die_addr);
+		if (!*ret) {
+			return drgn_error_create(DRGN_ERROR_BAD_DATA,
+						 "DIE from unknown DWARF CU");
+		}
+	}
+	return NULL;
+}
+
 /**
  * Iterator over DWARF debugging information.
  *
@@ -4648,13 +4671,12 @@ LIBDRGN_PUBLIC struct drgn_error *drgn_type_dwarf_die(struct drgn_type *type,
 		return drgn_error_create(DRGN_ERROR_LOOKUP,
 					 "type was not parsed from DWARF");
 	}
-	struct drgn_dwarf_index_cu *cu =
-		drgn_dwarf_index_find_cu(&drgn_type_program(type)->dbinfo,
-					 die_addr);
-	if (!cu) {
-		return drgn_error_create(DRGN_ERROR_BAD_DATA,
-					 "DIE from unknown DWARF CU");
-	}
+	struct drgn_dwarf_index_cu *cu;
+	struct drgn_error *err =
+		drgn_dwarf_index_find_cu_or_update(&drgn_type_program(type)->dbinfo,
+						   die_addr, &cu);
+	if (err)
+		return err;
 	*ret = (Dwarf_Die){
 		.addr = (void *)die_addr,
 		.cu = cu->libdw_cu,
@@ -4687,13 +4709,12 @@ struct drgn_error *drgn_dwarf_type_alignment(struct drgn_type *type,
 	uintptr_t die_addr = drgn_type_die_addr(type);
 	if (!die_addr)
 		return &drgn_not_found;
-	struct drgn_dwarf_index_cu *cu =
-		drgn_dwarf_index_find_cu(&drgn_type_program(type)->dbinfo,
-					 die_addr);
-	if (!cu) {
-		return drgn_error_create(DRGN_ERROR_BAD_DATA,
-					 "DIE from unknown DWARF CU");
-	}
+	struct drgn_dwarf_index_cu *cu;
+	struct drgn_error *err =
+		drgn_dwarf_index_find_cu_or_update(&drgn_type_program(type)->dbinfo,
+						   die_addr, &cu);
+	if (err)
+		return err;
 	Dwarf_Die die = {
 		.addr = (void *)die_addr,
 		.cu = cu->libdw_cu,
@@ -4814,13 +4835,12 @@ drgn_dwarf_append_fully_qualified_name(struct drgn_type *type,
 			// Use the enclosing type's tag as drgn names it (e.g.,
 			// with template arguments).
 			if (!file) {
-				struct drgn_dwarf_index_cu *cu =
-					drgn_dwarf_index_find_cu(dbinfo,
-								 (uintptr_t)die.addr);
-				if (!cu) {
-					return drgn_error_create(DRGN_ERROR_BAD_DATA,
-								 "DIE from unknown DWARF CU");
-				}
+				struct drgn_dwarf_index_cu *cu;
+				err = drgn_dwarf_index_find_cu_or_update(dbinfo,
+									 (uintptr_t)die.addr,
+									 &cu);
+				if (err)
+					return err;
 				file = cu->file;
 			}
 			struct drgn_qualified_type enclosing;
@@ -8577,12 +8597,11 @@ drgn_object_locator_init(struct drgn_program *prog, Dwarf_Die *function_die,
 		}
 	}
 
-	struct drgn_dwarf_index_cu *cu =
-		drgn_dwarf_index_find_cu(dbinfo, (uintptr_t)die->addr);
-	if (!cu) {
-		return drgn_error_create(DRGN_ERROR_BAD_DATA,
-					 "DIE from unknown DWARF CU");
-	}
+	struct drgn_dwarf_index_cu *cu;
+	err = drgn_dwarf_index_find_cu_or_update(dbinfo, (uintptr_t)die->addr,
+						 &cu);
+	if (err)
+		return err;
 	struct drgn_elf_file *file = cu->file;
 	struct drgn_module *module = file->module;
 
@@ -8627,11 +8646,15 @@ drgn_object_locator_init(struct drgn_program *prog, Dwarf_Die *function_die,
 					    &attr_mem))) {
 		struct drgn_elf_file *function_file = file;
 		if (function_die->cu != die->cu) {
-			struct drgn_dwarf_index_cu *function_cu =
-				drgn_dwarf_index_find_cu(dbinfo,
-							 (uintptr_t)function_die->addr);
-			if (function_cu)
-				function_file = function_cu->file;
+			struct drgn_dwarf_index_cu *function_cu;
+			err = drgn_dwarf_index_find_cu_or_update(dbinfo,
+								 (uintptr_t)function_die->addr,
+								 &function_cu);
+			if (err) {
+				drgn_object_locator_deinit(ret);
+				return err;
+			}
+			function_file = function_cu->file;
 		}
 		err = drgn_location_descriptions_from_attr(prog, function_file,
 							   attr,
