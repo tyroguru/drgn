@@ -400,6 +400,21 @@ struct drgn_architecture_info {
 							     size_t size,
 							     struct drgn_register_state **ret);
 	/**
+	 * Create a @ref drgn_register_state from an `elf_gregset_t` (e.g.,
+	 * `struct user_regs_struct` from `PTRACE_GETREGS`).
+	 *
+	 * This is optional; it is only used by @ref drgn_object_locate().
+	 *
+	 * @param[in] prog Program being debugged.
+	 * @param[in] regs Register buffer.
+	 * @param[in] size Size of @p regs.
+	 * @param[out] ret Returned registers.
+	 */
+	struct drgn_error *(*gregset_get_initial_registers)(struct drgn_program *prog,
+							    const void *regs,
+							    size_t size,
+							    struct drgn_register_state **ret);
+	/**
 	 * Create a @ref drgn_register_state from the `struct task_struct` of a
 	 * scheduled-out Linux kernel thread.
 	 *

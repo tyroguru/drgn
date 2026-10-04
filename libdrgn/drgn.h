@@ -1332,6 +1332,109 @@ drgn_program_find_function_by_address(struct drgn_program *prog,
 				      struct drgn_object *ret);
 
 /**
+ * @defgroup Locators Object locators
+ *
+ * Locating an object (e.g., a function parameter) at runtime without debug
+ * info.
+ *
+ * A @ref drgn_object_locator captures everything needed to find an object
+ * given a thread's registers: the object's location descriptions and those of
+ * its function's frame base, copied out of the debug info. It can then be
+ * evaluated with @ref drgn_object_locate() any number of times (e.g., each
+ * time a breakpoint is hit), and can be saved and restored by copying its
+ * fields.
+ *
+ * Expressions that refer to other debug info (e.g., `DW_OP_addrx`,
+ * `DW_OP_entry_value`, or `DW_OP_call_frame_cfa`) can't be evaluated; the
+ * located object is then absent.
+ *
+ * @{
+ */
+
+/**
+ * A DWARF location description and the range of program counters where it
+ * applies.
+ */
+struct drgn_location_description {
+	/** Start of the PC range (inclusive), as an address in the file. */
+	uint64_t start;
+	/** End of the PC range (exclusive), as an address in the file. */
+	uint64_t end;
+	/** Size of @ref expr in bytes. */
+	size_t expr_size;
+	/** DWARF expression bytes (not a string). */
+	const char *expr;
+};
+
+/** Everything needed to locate an object at runtime without debug info. */
+struct drgn_object_locator {
+	/** Start of the address range of the object's module. */
+	uint64_t module_start;
+	/** End of the address range of the object's module. */
+	uint64_t module_end;
+	/** Difference between loaded addresses and addresses in the file. */
+	uint64_t module_bias;
+	/** Number of entries in @ref locations. */
+	size_t locations_size;
+	/** Number of entries in @ref frame_base_locations. */
+	size_t frame_base_locations_size;
+	/** Location descriptions from the object's `DW_AT_location`. */
+	struct drgn_location_description *locations;
+	/**
+	 * Location descriptions from the containing function's
+	 * `DW_AT_frame_base`, if any (used by `DW_OP_fbreg`).
+	 */
+	struct drgn_location_description *frame_base_locations;
+	/** Type of the object. */
+	struct drgn_qualified_type qualified_type;
+};
+
+#ifdef _LIBDW_H
+/**
+ * Initialize a locator for the object described by a DWARF DIE.
+ *
+ * @param[in] prog Program containing @p die.
+ * @param[in] function_die The function containing @p die (a
+ * `DW_TAG_subprogram`, `DW_TAG_inlined_subroutine`, or `DW_TAG_entry_point`), or
+ * @c NULL if @p die is not in a function.
+ * @param[in] die DIE of the object, which must have `DW_AT_location`.
+ * @param[out] ret Returned locator. Free it with @ref
+ * drgn_object_locator_deinit().
+ * @return @c NULL on success, non-@c NULL on error.
+ */
+struct drgn_error *drgn_object_locator_init(struct drgn_program *prog,
+					    Dwarf_Die *function_die,
+					    Dwarf_Die *die,
+					    struct drgn_object_locator *ret);
+#endif
+
+/**
+ * Deinitialize a @ref drgn_object_locator.
+ *
+ * The location descriptions and their expressions must have been allocated
+ * with `malloc()`.
+ */
+void drgn_object_locator_deinit(struct drgn_object_locator *locator);
+
+/**
+ * Locate an object given a thread's registers.
+ *
+ * @param[in] locator Locator for the object.
+ * @param[in] regs Thread's registers in the platform's `elf_gregset_t` layout
+ * (`struct user_regs_struct` on x86-64), as returned by `PTRACE_GETREGS`.
+ * @param[in] regs_size Size of @p regs in bytes.
+ * @param[out] ret Returned object, which is initialized by this function (it
+ * must not already be initialized). It belongs to the program of the
+ * locator's type and must be deinitialized with @ref drgn_object_deinit().
+ * @return @c NULL on success, non-@c NULL on error.
+ */
+struct drgn_error *drgn_object_locate(const struct drgn_object_locator *locator,
+				      const void *regs, size_t regs_size,
+				      struct drgn_object *ret);
+
+/** @} */
+
+/**
  * @ingroup Symbols
  *
  * @struct drgn_symbol

@@ -370,6 +370,15 @@ pt_regs_get_initial_registers_x86_64(const struct drgn_object *obj,
 }
 
 static struct drgn_error *
+gregset_get_initial_registers_x86_64(struct drgn_program *prog,
+				     const void *regs, size_t size,
+				     struct drgn_register_state **ret)
+{
+	return get_initial_registers_from_struct_x86_64(prog, regs, size, true,
+							ret);
+}
+
+static struct drgn_error *
 prstatus_get_initial_registers_x86_64(struct drgn_program *prog,
 				      const void *prstatus, size_t size,
 				      struct drgn_register_state **ret)
@@ -710,6 +719,7 @@ const struct drgn_architecture_info arch_info_x86_64 = {
 	.bad_call_unwind = bad_call_unwind_x86_64,
 	.pt_regs_get_initial_registers = pt_regs_get_initial_registers_x86_64,
 	.prstatus_get_initial_registers = prstatus_get_initial_registers_x86_64,
+	.gregset_get_initial_registers = gregset_get_initial_registers_x86_64,
 	.linux_kernel_get_initial_registers =
 		linux_kernel_get_initial_registers_x86_64,
 	.apply_elf_reloc = apply_elf_reloc_x86_64,

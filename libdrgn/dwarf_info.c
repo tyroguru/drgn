@@ -3803,6 +3803,10 @@ struct drgn_dwarf_expression_context {
 	const char *cu_addr_base;
 	Dwarf_Die *function;
 	const struct drgn_register_state *regs;
+	// If non-NULL, the expression is being evaluated from a @ref
+	// drgn_object_locator without debug info: module addresses come from
+	// it, and so does DW_OP_fbreg's frame base.
+	const struct drgn_object_locator *locator;
 };
 
 static struct drgn_error *
@@ -3842,11 +3846,38 @@ drgn_dwarf_expression_context_init(struct drgn_dwarf_expression_context *ctx,
 	ctx->cu_addr_base = NULL;
 	ctx->function = function;
 	ctx->regs = regs;
+	ctx->locator = NULL;
 	return NULL;
+}
+
+// Find the location description in @p locations that applies at the PC in @p
+// regs. Returns a NULL expression if there is none.
+static void
+drgn_object_locator_find_expr(const struct drgn_object_locator *locator,
+			      const struct drgn_location_description *locations,
+			      size_t num_locations,
+			      const struct drgn_register_state *regs,
+			      const char **expr_ret, size_t *expr_size_ret)
+{
+	*expr_ret = NULL;
+	*expr_size_ret = 0;
+	struct optional_uint64 pc;
+	if (!regs || !(pc = drgn_register_state_get_pc(regs)).has_value)
+		return;
+	pc.value -= !regs->interrupted + locator->module_bias;
+	for (size_t i = 0; i < num_locations; i++) {
+		if (locations[i].start <= pc.value
+		    && pc.value < locations[i].end) {
+			*expr_ret = locations[i].expr;
+			*expr_size_ret = locations[i].expr_size;
+			return;
+		}
+	}
 }
 
 static struct drgn_error *
 drgn_dwarf_frame_base(struct drgn_program *prog, struct drgn_elf_file *file,
+		      const struct drgn_object_locator *locator,
 		      Dwarf_Die *die, const struct drgn_register_state *regs,
 		      int *remaining_ops, uint64_t *ret);
 
@@ -3961,7 +3992,12 @@ addr:
 			 * address but an offset). Don't apply the bias in that
 			 * case.
 			 */
-			if (drgn_module_contains_address(ctx->file->module,
+			if (ctx->locator) {
+				uint64_t biased = uvalue + ctx->locator->module_bias;
+				if (ctx->locator->module_start <= biased
+				    && biased < ctx->locator->module_end)
+					uvalue = biased & address_mask;
+			} else if (drgn_module_contains_address(ctx->file->module,
 					uvalue + ctx->file->module->debug_file_bias)) {
 				uvalue = (uvalue + ctx->file->module->debug_file_bias)
 					 & address_mask;
@@ -4057,6 +4093,7 @@ addr:
 		/* Register values. */
 		case DW_OP_fbreg: {
 			err = drgn_dwarf_frame_base(ctx->prog, ctx->file,
+						    ctx->locator,
 						    ctx->function, ctx->regs,
 						    remaining_ops, &uvalue);
 			if (err)
@@ -4393,6 +4430,7 @@ branch:
 
 static struct drgn_error *
 drgn_dwarf_frame_base(struct drgn_program *prog, struct drgn_elf_file *file,
+		      const struct drgn_object_locator *locator,
 		      Dwarf_Die *die, const struct drgn_register_state *regs,
 		      int *remaining_ops, uint64_t *ret)
 {
@@ -4403,22 +4441,36 @@ drgn_dwarf_frame_base(struct drgn_program *prog, struct drgn_elf_file *file,
 	drgn_register_number (*dwarf_regno_to_internal)(uint64_t) =
 		file->platform.arch->dwarf_regno_to_internal;
 
-	if (!die)
-		return &drgn_not_found;
-	Dwarf_Attribute attr_mem, *attr;
-	if (!(attr = dwarf_attr_integrate(die, DW_AT_frame_base, &attr_mem)))
-		return &drgn_not_found;
 	const char *expr;
 	size_t expr_size;
-	err = drgn_dwarf_location(file, attr, regs, &expr, &expr_size);
-	if (err)
-		return err;
+	Dwarf_CU *cu;
+	if (locator) {
+		drgn_object_locator_find_expr(locator,
+					      locator->frame_base_locations,
+					      locator->frame_base_locations_size,
+					      regs, &expr, &expr_size);
+		if (!expr)
+			return &drgn_not_found;
+		cu = NULL;
+	} else {
+		if (!die)
+			return &drgn_not_found;
+		Dwarf_Attribute attr_mem, *attr;
+		if (!(attr = dwarf_attr_integrate(die, DW_AT_frame_base,
+						  &attr_mem)))
+			return &drgn_not_found;
+		err = drgn_dwarf_location(file, attr, regs, &expr, &expr_size);
+		if (err)
+			return err;
+		cu = die->cu;
+	}
 
 	struct drgn_dwarf_expression_context ctx;
-	if ((err = drgn_dwarf_expression_context_init(&ctx, prog, file, die->cu,
+	if ((err = drgn_dwarf_expression_context_init(&ctx, prog, file, cu,
 						      NULL, regs, expr,
 						      expr_size)))
 		return err;
+	ctx.locator = locator;
 	VECTOR(uint64_vector, stack);
 	for (;;) {
 		err = drgn_eval_dwarf_expression(&ctx, &stack, remaining_ops);
@@ -5265,7 +5317,9 @@ static struct drgn_error *read_bits(struct drgn_program *prog, void *dst,
 
 static struct drgn_error *
 drgn_object_from_dwarf_location(struct drgn_program *prog,
-				struct drgn_elf_file *file, Dwarf_Die *die,
+				struct drgn_elf_file *file,
+				const struct drgn_object_locator *locator,
+				Dwarf_Die *die,
 				struct drgn_qualified_type qualified_type,
 				const char *expr, size_t expr_size,
 				Dwarf_Die *function_die,
@@ -5298,10 +5352,12 @@ drgn_object_from_dwarf_location(struct drgn_program *prog,
 
 	int remaining_ops = MAX_DWARF_EXPR_OPS;
 	struct drgn_dwarf_expression_context ctx;
-	if ((err = drgn_dwarf_expression_context_init(&ctx, prog, file, die->cu,
+	if ((err = drgn_dwarf_expression_context_init(&ctx, prog, file,
+						      die ? die->cu : NULL,
 						      function_die, regs, expr,
 						      expr_size)))
 		return err;
+	ctx.locator = locator;
 	struct uint64_vector stack = VECTOR_INIT;
 	do {
 		uint64_vector_clear(&stack);
@@ -5548,7 +5604,7 @@ reg:
 
 	if (bit_pos < type.bit_size || (bit_offset < 0 && !value_buf)) {
 absent:
-		if (dwarf_tag(die) == DW_TAG_template_value_parameter) {
+		if (die && dwarf_tag(die) == DW_TAG_template_value_parameter) {
 			err = drgn_error_create(DRGN_ERROR_BAD_DATA,
 						"DW_AT_template_value_parameter is missing value");
 			goto out;
@@ -5655,7 +5711,7 @@ drgn_object_from_dwarf(struct drgn_debug_info *dbinfo,
 		expr = NULL;
 		expr_size = 0;
 	}
-	return drgn_object_from_dwarf_location(dbinfo->prog, file, die,
+	return drgn_object_from_dwarf_location(dbinfo->prog, file, NULL, die,
 					       qualified_type, expr, expr_size,
 					       function_die, regs, ret);
 }
@@ -8420,4 +8476,222 @@ drgn_eval_cfi_dwarf_expression(struct drgn_program *prog,
 			     HOST_LITTLE_ENDIAN);
 		return NULL;
 	}
+}
+
+DEFINE_VECTOR(drgn_location_description_vector,
+	      struct drgn_location_description);
+
+static void
+drgn_location_descriptions_free(struct drgn_location_description *locations,
+				size_t num_locations)
+{
+	for (size_t i = 0; i < num_locations; i++)
+		free((char *)locations[i].expr);
+	free(locations);
+}
+
+// Copy every location description of a location attribute (a single
+// expression or a location list).
+static struct drgn_error *
+drgn_location_descriptions_from_attr(struct drgn_program *prog,
+				     struct drgn_elf_file *file,
+				     Dwarf_Attribute *attr,
+				     struct drgn_location_description **ret,
+				     size_t *num_ret)
+{
+	struct drgn_error *err;
+	// libdw enumerates the ranges; drgn_dwarf_location() then gives us
+	// the raw expression for each one.
+	_cleanup_free_ struct drgn_register_state *regs =
+		drgn_register_state_create_impl(0, 0, true);
+	if (!regs)
+		return &drgn_enomem;
+	VECTOR(drgn_location_description_vector, locations);
+	ptrdiff_t offset = 0;
+	Dwarf_Addr base, start, end;
+	Dwarf_Op *ops;
+	size_t num_ops;
+	while ((offset = dwarf_getlocations(attr, offset, &base, &start, &end,
+					    &ops, &num_ops)) > 0) {
+		if (start >= end)
+			continue;
+		drgn_register_state_set_pc(prog, regs,
+					   start + file->module->debug_file_bias);
+		const char *expr;
+		size_t expr_size;
+		err = drgn_dwarf_location(file, attr, regs, &expr, &expr_size);
+		if (err)
+			goto err;
+		if (!expr)
+			continue;
+		struct drgn_location_description *location =
+			drgn_location_description_vector_append_entry(&locations);
+		if (!location) {
+			err = &drgn_enomem;
+			goto err;
+		}
+		location->start = start;
+		location->end = end;
+		location->expr_size = expr_size;
+		location->expr = expr_size ? memdup(expr, expr_size) : malloc(1);
+		if (!location->expr) {
+			drgn_location_description_vector_pop(&locations);
+			err = &drgn_enomem;
+			goto err;
+		}
+	}
+	if (offset < 0) {
+		err = drgn_error_libdw();
+		goto err;
+	}
+	drgn_location_description_vector_shrink_to_fit(&locations);
+	drgn_location_description_vector_steal(&locations, ret, num_ret);
+	return NULL;
+
+err:
+	drgn_location_descriptions_free(drgn_location_description_vector_begin(&locations),
+					drgn_location_description_vector_size(&locations));
+	drgn_location_description_vector_init(&locations);
+	return err;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_object_locator_init(struct drgn_program *prog, Dwarf_Die *function_die,
+			 Dwarf_Die *die, struct drgn_object_locator *ret)
+{
+	struct drgn_error *err;
+	struct drgn_debug_info *dbinfo = &prog->dbinfo;
+
+	if (function_die) {
+		int tag = dwarf_tag(function_die);
+		if (tag != DW_TAG_subprogram
+		    && tag != DW_TAG_inlined_subroutine
+		    && tag != DW_TAG_entry_point) {
+			char tag_buf[DW_TAG_STR_BUF_LEN];
+			return drgn_error_format(DRGN_ERROR_INVALID_ARGUMENT,
+						 "function DIE is %s, not a function",
+						 dwarf_tag_str(function_die,
+							       tag_buf));
+		}
+	}
+
+	struct drgn_dwarf_index_cu *cu =
+		drgn_dwarf_index_find_cu(dbinfo, (uintptr_t)die->addr);
+	if (!cu) {
+		return drgn_error_create(DRGN_ERROR_BAD_DATA,
+					 "DIE from unknown DWARF CU");
+	}
+	struct drgn_elf_file *file = cu->file;
+	struct drgn_module *module = file->module;
+
+	*ret = (struct drgn_object_locator){
+		.module_bias = module->debug_file_bias,
+	};
+	// The module's overall address range, for deciding whether to bias
+	// DW_OP_addr (see drgn_module_contains_address()).
+	size_t num_ranges;
+	if (drgn_module_num_address_ranges(module, &num_ranges)) {
+		ret->module_start = UINT64_MAX;
+		for (size_t i = 0; i < num_ranges; i++) {
+			uint64_t start, end;
+			drgn_module_address_range(module, i, &start, &end);
+			ret->module_start = min(ret->module_start, start);
+			ret->module_end = max(ret->module_end, end);
+		}
+		if (ret->module_start > ret->module_end)
+			ret->module_start = ret->module_end = 0;
+	}
+
+	err = drgn_type_from_dwarf_attr(dbinfo, file, die, NULL, true, true,
+					NULL, &ret->qualified_type);
+	if (err)
+		return err;
+
+	Dwarf_Attribute attr_mem, *attr;
+	if (!(attr = dwarf_attr_integrate(die, DW_AT_location, &attr_mem))) {
+		return drgn_error_create(DRGN_ERROR_LOOKUP,
+					 "DIE has no DW_AT_location");
+	}
+	err = drgn_location_descriptions_from_attr(prog, file, attr,
+						   &ret->locations,
+						   &ret->locations_size);
+	if (err)
+		return err;
+
+	// An inlined subroutine has no DW_AT_frame_base, and a function whose
+	// variables don't use DW_OP_fbreg may not either.
+	if (function_die
+	    && (attr = dwarf_attr_integrate(function_die, DW_AT_frame_base,
+					    &attr_mem))) {
+		struct drgn_elf_file *function_file = file;
+		if (function_die->cu != die->cu) {
+			struct drgn_dwarf_index_cu *function_cu =
+				drgn_dwarf_index_find_cu(dbinfo,
+							 (uintptr_t)function_die->addr);
+			if (function_cu)
+				function_file = function_cu->file;
+		}
+		err = drgn_location_descriptions_from_attr(prog, function_file,
+							   attr,
+							   &ret->frame_base_locations,
+							   &ret->frame_base_locations_size);
+		if (err) {
+			drgn_object_locator_deinit(ret);
+			return err;
+		}
+	}
+	return NULL;
+}
+
+LIBDRGN_PUBLIC void
+drgn_object_locator_deinit(struct drgn_object_locator *locator)
+{
+	drgn_location_descriptions_free(locator->locations,
+					locator->locations_size);
+	drgn_location_descriptions_free(locator->frame_base_locations,
+					locator->frame_base_locations_size);
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_object_locate(const struct drgn_object_locator *locator,
+		   const void *regs_buf, size_t regs_size,
+		   struct drgn_object *ret)
+{
+	struct drgn_error *err;
+	struct drgn_program *prog =
+		drgn_type_program(locator->qualified_type.type);
+	drgn_object_init(ret, prog);
+
+	if (!prog->has_platform) {
+		return drgn_error_create(DRGN_ERROR_INVALID_ARGUMENT,
+					 "program platform is not known");
+	}
+	const struct drgn_architecture_info *arch = prog->platform.arch;
+	if (!arch->gregset_get_initial_registers) {
+		return drgn_error_format(DRGN_ERROR_NOT_IMPLEMENTED,
+					 "object locators are not implemented for %s architecture",
+					 arch->name);
+	}
+	_cleanup_free_ struct drgn_register_state *regs = NULL;
+	err = arch->gregset_get_initial_registers(prog, regs_buf, regs_size,
+						  &regs);
+	if (err)
+		return err;
+
+	const char *expr;
+	size_t expr_size;
+	drgn_object_locator_find_expr(locator, locator->locations,
+				      locator->locations_size, regs, &expr,
+				      &expr_size);
+	// Evaluate without debug info: a stand-in file only provides the
+	// platform, and the locator provides module addresses and the frame
+	// base.
+	struct drgn_elf_file file = {
+		.path = "<object locator>",
+		.fd = -1,
+		.platform = prog->platform,
+	};
+	return drgn_object_from_dwarf_location(prog, &file, locator, NULL,
+					       locator->qualified_type, expr,
+					       expr_size, NULL, regs, ret);
 }
