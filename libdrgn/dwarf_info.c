@@ -3085,11 +3085,15 @@ struct drgn_error *drgn_module_find_dwarf_scopes(struct drgn_module *module,
 	 * descend into that one.
 	 *
 	 * We only want to descend into children DIEs when the last DIE
-	 * contained the PC, which is when size(it.dies) == subtree.
+	 * contained the PC, which is when size(it.dies) == subtree. We also
+	 * descend into namespaces: they never contain the PC, but C++
+	 * compilers can put function definitions inside them.
 	 */
 	while (!(err = drgn_dwarf_die_iterator_next(&it,
 						    dwarf_die_vector_size(&it.dies)
-						    == subtree,
+						    == subtree
+						    || dwarf_tag(dwarf_die_vector_last(&it.dies))
+						    == DW_TAG_namespace,
 						    subtree))) {
 		int r = dwarf_haspc(dwarf_die_vector_last(&it.dies), pc);
 		if (r > 0) {
