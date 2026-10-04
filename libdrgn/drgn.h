@@ -1312,6 +1312,26 @@ struct drgn_error *drgn_program_find_object(struct drgn_program *prog,
 					    struct drgn_object *ret);
 
 /**
+ * Find the function containing an address.
+ *
+ * This finds the innermost function (possibly an inlined function) whose code
+ * contains @p address.
+ *
+ * @param[in] prog Program.
+ * @param[in] address Address to look up.
+ * @param[out] name_ret Returned function name. It is valid until the program
+ * is destroyed. May be @c NULL if the function has no name.
+ * @param[out] ret Returned function object. This must have already been
+ * initialized with @ref drgn_object_init().
+ * @return @c NULL on success, non-@c NULL on error. Returns an error with code
+ * @ref DRGN_ERROR_LOOKUP if no function contains @p address.
+ */
+struct drgn_error *
+drgn_program_find_function_by_address(struct drgn_program *prog,
+				      uint64_t address, const char **name_ret,
+				      struct drgn_object *ret);
+
+/**
  * @ingroup Symbols
  *
  * @struct drgn_symbol

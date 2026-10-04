@@ -5131,6 +5131,71 @@ drgn_object_from_dwarf_subprogram(struct drgn_debug_info *dbinfo,
 					 0, 0);
 }
 
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_program_find_function_by_address(struct drgn_program *prog,
+				      uint64_t address, const char **name_ret,
+				      struct drgn_object *ret)
+{
+	struct drgn_error *err;
+	struct drgn_module *module = drgn_module_find_by_address(prog, address);
+	if (!module) {
+		return drgn_error_format(DRGN_ERROR_LOOKUP,
+					 "could not find module containing 0x%" PRIx64,
+					 address);
+	}
+	uint64_t bias;
+	_cleanup_free_ Dwarf_Die *scopes = NULL;
+	size_t num_scopes;
+	err = drgn_module_find_dwarf_scopes(module, address, &bias, &scopes,
+					    &num_scopes);
+	if (err)
+		return err;
+	// Return the outermost subprogram, i.e., the out-of-line function
+	// containing the address, not a function inlined into it. scopes[0]
+	// is the CU.
+	for (size_t i = 1; i < num_scopes; i++) {
+		if (dwarf_tag(&scopes[i]) != DW_TAG_subprogram)
+			continue;
+		struct drgn_elf_file *file =
+			drgn_module_find_dwarf_file(module,
+						    dwarf_cu_getdwarf(scopes[i].cu));
+		if (!file) {
+			return drgn_error_create(DRGN_ERROR_BAD_DATA,
+						 "couldn't find file containing DIE");
+		}
+		// A concrete out-of-line instance of an inline function gets
+		// its name and type from its abstract origin.
+		Dwarf_Die *type_die = &scopes[i], origin_mem;
+		Dwarf_Attribute attr_mem, *attr;
+		if ((attr = dwarf_attr(&scopes[i], DW_AT_abstract_origin,
+				       &attr_mem))) {
+			if (!(type_die = dwarf_formref_die(attr, &origin_mem))) {
+				return drgn_error_create(DRGN_ERROR_BAD_DATA,
+							 "DW_TAG_subprogram has invalid DW_AT_abstract_origin");
+			}
+		}
+		*name_ret = (attr = dwarf_attr_integrate(type_die, DW_AT_name,
+							 &attr_mem))
+			    ? dwarf_formstring(attr) : NULL;
+		struct drgn_qualified_type qualified_type;
+		err = drgn_type_from_dwarf(&prog->dbinfo, file, type_die,
+					   &qualified_type);
+		if (err)
+			return err;
+		Dwarf_Addr low_pc;
+		if (dwarf_lowpc(&scopes[i], &low_pc) == -1) {
+			// Ranges without DW_AT_low_pc: use the entry point.
+			if (dwarf_entrypc(&scopes[i], &low_pc) == -1)
+				low_pc = address - bias;
+		}
+		return drgn_object_set_reference(ret, qualified_type,
+						 low_pc + bias, 0, 0);
+	}
+	return drgn_error_format(DRGN_ERROR_LOOKUP,
+				 "could not find function containing 0x%" PRIx64,
+				 address);
+}
+
 static struct drgn_error *read_bits(struct drgn_program *prog, void *dst,
 				    unsigned int dst_bit_offset, uint64_t src,
 				    unsigned int src_bit_offset,
