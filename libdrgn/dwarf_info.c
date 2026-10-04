@@ -7301,7 +7301,9 @@ drgn_type_from_dwarf_internal(struct drgn_debug_info *dbinfo,
 	}
 	if (err)
 		return err;
-	if (drgn_type_has_die_addr(ret->type))
+	// A qualifier DIE resolves to the type of the DIE that it qualifies,
+	// which recorded its own DIE address. Don't overwrite it.
+	if (!ret->qualifiers && drgn_type_has_die_addr(ret->type))
 		drgn_type_init_die_addr(ret->type, (uintptr_t)die->addr);
 
 	entry.value.type = ret->type;

@@ -4589,6 +4589,41 @@ class TestTypes(TestCase):
         )
         self.assertEqual(alignof(prog.type("TEST")), 64)
 
+    def test_alignment_through_qualifier(self):
+        # The structure is first parsed through a qualifier DIE. Its type must
+        # still refer to the structure's own DIE, which has DW_AT_alignment.
+        prog = dwarf_program(
+            wrap_test_type_dies(
+                DwarfDie(
+                    DW_TAG.const_type,
+                    (DwarfAttrib(DW_AT.type, DW_FORM.ref4, "cacheline_die"),),
+                ),
+                DwarfLabel("cacheline_die"),
+                DwarfDie(
+                    DW_TAG.structure_type,
+                    (
+                        DwarfAttrib(DW_AT.name, DW_FORM.string, "cacheline"),
+                        DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 64),
+                        DwarfAttrib(DW_AT.alignment, DW_FORM.data1, 64),
+                    ),
+                    (
+                        DwarfDie(
+                            DW_TAG.member,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "x"),
+                                DwarfAttrib(
+                                    DW_AT.data_member_location, DW_FORM.data1, 0
+                                ),
+                                DwarfAttrib(DW_AT.type, DW_FORM.ref4, "int_die"),
+                            ),
+                        ),
+                    ),
+                ),
+                *labeled_int_die,
+            )
+        )
+        self.assertEqual(alignof(prog.type("TEST")), 64)
+
     def test_many_skipped_attribs(self):
         prog = dwarf_program(
             (
